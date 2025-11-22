@@ -2,7 +2,6 @@ import Fastify from "fastify";
 import { v4 as uuidv4 } from "uuid";
 import WebSocket, { WebSocketServer } from "ws";
 import { OrderRequest, OrderState, OrderStatus } from "./types";
-import { timeStamp } from "console";
 
 const PORT = Number(process.env.PORT || 3000);
 
@@ -128,6 +127,9 @@ const start = async () => {
         );
 
         if (url.pathname != "/api/orders/execute") {
+          fastify.log.error(
+            "Incorrect pathname, please check your connection."
+          );
           socket.write("HTTP/1.1 404 Not Found\r\n\r\n");
           socket.destroy();
           return;
@@ -135,7 +137,7 @@ const start = async () => {
 
         const orderId = url.searchParams.get("orderId");
 
-        if (!orderId || orders.has(orderId)) {
+        if (!orderId || !orders.has(orderId)) {
           socket.write("HTTP/1.1 404 Not Found\r\n\r\n");
           socket.destroy();
           return;
@@ -155,28 +157,6 @@ const start = async () => {
             { order: order },
             "Connection upgraded to websocket for live updates!"
           );
-
-          //   try {
-          //     ws.send(
-          //       JSON.stringify({
-          //         orderId: order.id,
-          //         status: order.status,
-          //         timestamp: new Date().toISOString(),
-          //       })
-          //     );
-          //   } catch (err) {
-          //     fastify.log.warn(
-          //       { err, orderId: order.id },
-          //       "Failed to send current status"
-          //     );
-          //   }
-
-          //   ws.on("message", (data) => {
-          //     fastify.log.debug(
-          //       { orderId: order.id, data: data.toString() },
-          //       "Message from client"
-          //     );
-          //   });
 
           ws.on("close", () => {
             fastify.log.info(
