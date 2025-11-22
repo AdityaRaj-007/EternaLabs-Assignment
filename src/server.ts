@@ -1,12 +1,76 @@
 import Fastify from "fastify";
 import { v4 as uuidv4 } from "uuid";
-import { OrderRequest } from "./types";
+import WebSocket, { WebSocketServer } from "ws";
+import { OrderRequest, OrderState, OrderStatus } from "./types";
+import { timeStamp } from "console";
 
 const PORT = Number(process.env.PORT || 3000);
 
 const fastify = Fastify({
   logger: true,
 });
+
+// to store orders temporarily.
+const orders = new Map<string, OrderState>();
+
+// we are not attaching any server becuase we want to upgrade manually
+const websocket = new WebSocketServer({ noServer: true });
+
+const processOrder = (orderId: string) => {
+  const processStep = (
+    status: OrderStatus,
+    delay: number,
+    next?: () => void
+  ) => {
+    setTimeout(() => {
+      const order = orders.get(orderId);
+
+      if (!order) return;
+
+      fastify.log.info(
+        { orderId: order.id, status: status },
+        "Status updated!"
+      );
+
+      order.status = status;
+
+      if (order.socket && order.socket.readyState === WebSocket.OPEN) {
+        try {
+          order.socket.send(
+            JSON.stringify({
+              orderId: order.id,
+              status,
+              timestamp: new Date().toISOString(),
+            })
+          );
+        } catch (err) {
+          fastify.log.error(
+            { err, orderId: order.id },
+            "Failed to send status update!"
+          );
+        }
+      }
+
+      if (next) next();
+
+      if (status === "confirmed") {
+        if (order.socket) {
+          try {
+            order.socket.close();
+          } catch {}
+        }
+
+        orders.delete(orderId);
+      }
+    }, delay);
+  };
+
+  processStep("pending", 1000, () => {
+    processStep("submitted", 1500, () => {
+      processStep("confirmed", 3000);
+    });
+  });
+};
 
 fastify.post<{ Body: OrderRequest }>(
   "/api/orders/execute",
@@ -19,20 +83,126 @@ fastify.post<{ Body: OrderRequest }>(
       typeof amount !== "number" ||
       amount <= 0
     ) {
-      reply.status(400).send({
+      return reply.code(400).send({
         error:
           "Invalid error data. Provided all the required information to execute the order!",
       });
-      return;
     }
 
     const orderId = uuidv4();
+
+    orders.set(orderId, {
+      id: orderId,
+      orderDetails: { inputToken, outputToken, amount },
+      status: "pending",
+    });
+
+    processOrder(orderId);
+
+    // we need to keep the connection alive to upgrade the same connection to websocket;
+    reply.raw.writeHead(200, {
+      "Content-Type": "applicaion/json",
+      Connection: "keep-alive",
+      "Keep-Alive": "timeout=10",
+    });
+
+    return reply.raw.end(
+      JSON.stringify({ orderId, message: "Order placed successfully!" })
+    );
   }
 );
 
-fastify.listen({ port: PORT }, (err, address) => {
-  if (err) {
+const start = async () => {
+  try {
+    await fastify.listen({ port: PORT, host: "0.0.0.0" });
+    fastify.log.info(`Server running at http://localhost:${PORT}`);
+
+    const server = fastify.server;
+
+    // manual handling an upgrade event from the client.
+    server.on("upgrade", (request, socket, head) => {
+      try {
+        const url = new URL(
+          request.url ?? "",
+          `https://${request.headers.host}`
+        );
+
+        if (url.pathname != "/api/orders/execute") {
+          socket.write("HTTP/1.1 404 Not Found\r\n\r\n");
+          socket.destroy();
+          return;
+        }
+
+        const orderId = url.searchParams.get("orderId");
+
+        if (!orderId || orders.has(orderId)) {
+          socket.write("HTTP/1.1 404 Not Found\r\n\r\n");
+          socket.destroy();
+          return;
+        }
+
+        websocket.handleUpgrade(request, socket, head, (ws) => {
+          const order = orders.get(orderId);
+
+          if (!order) {
+            socket.destroy();
+            return;
+          }
+
+          order.socket = ws;
+
+          fastify.log.info(
+            { order: order },
+            "Connection upgraded to websocket for live updates!"
+          );
+
+          //   try {
+          //     ws.send(
+          //       JSON.stringify({
+          //         orderId: order.id,
+          //         status: order.status,
+          //         timestamp: new Date().toISOString(),
+          //       })
+          //     );
+          //   } catch (err) {
+          //     fastify.log.warn(
+          //       { err, orderId: order.id },
+          //       "Failed to send current status"
+          //     );
+          //   }
+
+          //   ws.on("message", (data) => {
+          //     fastify.log.debug(
+          //       { orderId: order.id, data: data.toString() },
+          //       "Message from client"
+          //     );
+          //   });
+
+          ws.on("close", () => {
+            fastify.log.info(
+              { orderId: order.id, status: order.status },
+              "Client asked to close the connection! "
+            );
+          });
+
+          ws.on("error", (err) => {
+            fastify.log.error(
+              { err, orderId: order.id },
+              "WebSocket connection error"
+            );
+          });
+        });
+      } catch (err) {
+        try {
+          socket.write("HTTP/1.1 400 Bad Request\r\n\r\n");
+        } catch {}
+        socket.destroy();
+      }
+    });
+  } catch (err) {
     fastify.log.error(err);
     process.exit(1);
   }
-});
+};
+
+start();
