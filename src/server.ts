@@ -1,10 +1,16 @@
 import Fastify from "fastify";
 import { v4 as uuidv4 } from "uuid";
-import { WebSocketServer } from "ws";
+import { WebSocket, WebSocketServer } from "ws";
 import { OrderRequest, OrderState } from "./types";
 import { orderEngine } from "./engine";
+import { subscriberConnection } from "./utils/redisConnection";
+import { addOrderToQueue } from "./services/orderQueue";
 
 const PORT = Number(process.env.PORT || 3000);
+
+const redisSubscriber = subscriberConnection;
+
+const activeClients = new Map<string, WebSocket>();
 
 const fastify = Fastify({
   logger: true,
@@ -72,6 +78,32 @@ const websocket = new WebSocketServer({ noServer: true });
 //   });
 // };
 
+redisSubscriber.subscribe("order-updates");
+redisSubscriber.on("message", (channel, message) => {
+  if (channel === "order-updates") {
+    const update: OrderState = JSON.parse(message);
+
+    const activeSocketForOrder = activeClients.get(update.id);
+
+    if (
+      activeSocketForOrder &&
+      activeSocketForOrder.readyState === WebSocket.OPEN
+    ) {
+      try {
+        activeSocketForOrder.send(
+          JSON.stringify({
+            id: update.id,
+            status: update.status,
+            timestamp: new Date().toISOString(),
+          })
+        );
+      } catch (err) {
+        console.log(`Failed to send status update for order: ${update.id}`);
+      }
+    }
+  }
+});
+
 fastify.post<{ Body: OrderRequest }>(
   "/api/orders/execute",
   async (request, reply) => {
@@ -97,11 +129,15 @@ fastify.post<{ Body: OrderRequest }>(
     //   status: "pending",
     // });
 
-    orderEngine.createOrder(orderId, { inputToken, outputToken, amount });
+    // orderEngine.createOrder(orderId, { inputToken, outputToken, amount });
+    const orderDetails = { inputToken, outputToken, amount };
+    addOrderToQueue(orderId, orderDetails);
 
     // processOrder(orderId);
 
-    orderEngine.processOrder(orderId);
+    // orderEngine.processOrder(orderId);
+
+    reply.hijack();
 
     // we need to keep the connection alive to upgrade the same connection to websocket;
     reply.raw.writeHead(200, {
@@ -142,41 +178,48 @@ const start = async () => {
 
         const orderId = url.searchParams.get("orderId");
 
-        if (!orderId || !orderEngine.getOrderDetails(orderId)) {
+        // if (!orderId || !orderEngine.getOrderDetails(orderId)) {
+        //   socket.write("HTTP/1.1 404 Not Found\r\n\r\n");
+        //   socket.destroy();
+        //   return;
+        // }
+
+        if (!orderId) {
           socket.write("HTTP/1.1 404 Not Found\r\n\r\n");
           socket.destroy();
           return;
         }
 
         websocket.handleUpgrade(request, socket, head, (ws) => {
-          const order = orderEngine.getOrderDetails(orderId);
+          //   const order = orderEngine.getOrderDetails(orderId);
 
-          if (!order) {
-            socket.destroy();
-            return;
-          }
+          //   if (!order) {
+          //     socket.destroy();
+          //     return;
+          //   }
 
           //   order.socket = ws;
-          orderEngine.attachSocketToOrder(orderId, ws);
+          //orderEngine.attachSocketToOrder(orderId, ws);
+
+          activeClients.set(orderId, ws);
 
           fastify.log.info(
-            { order: order },
             "Connection upgraded to websocket for live updates!"
           );
 
-          ws.on("close", () => {
-            fastify.log.info(
-              { orderId: order.id, status: order.status },
-              "Client asked to close the connection! "
-            );
-          });
+          //   ws.on("close", () => {
+          //     fastify.log.info(
+          //       { orderId: order.id, status: order.status },
+          //       "Client asked to close the connection! "
+          //     );
+          //   });
 
-          ws.on("error", (err) => {
-            fastify.log.error(
-              { err, orderId: order.id },
-              "WebSocket connection error"
-            );
-          });
+          //   ws.on("error", (err) => {
+          //     fastify.log.error(
+          //       { err, orderId: order.id },
+          //       "WebSocket connection error"
+          //     );
+          //   });
         });
       } catch (err) {
         try {

@@ -8,6 +8,11 @@ export interface OrderRequest {
   amount: number;
 }
 
+export interface QueueJobData {
+  orderId: string;
+  orderDetails: OrderRequest;
+}
+
 export interface OrderState {
   id: string;
   orderDetails: OrderRequest;
