@@ -8,7 +8,9 @@ const publisher = publisherConnection;
 const FAILURE_RATES = 0.1;
 
 const simulateFailedOrder = (job: Job<QueueJobData>) => {
+  //console.log(`Attempt no: ${job.attemptsMade}`);
   const rate = 1 - Math.pow(1 - FAILURE_RATES, job.attemptsMade + 1);
+  //console.log(`Failure rate: ${rate}`);
   return Math.random() < rate;
 };
 

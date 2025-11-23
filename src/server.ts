@@ -97,6 +97,12 @@ redisSubscriber.on("message", (channel, message) => {
             timestamp: new Date().toISOString(),
           })
         );
+
+        if (update.status === "confirmed" || update.status === "failed") {
+          try {
+            activeSocketForOrder.close();
+          } catch {}
+        }
       } catch (err) {
         console.log(`Failed to send status update for order: ${update.id}`);
       }
@@ -136,6 +142,10 @@ fastify.post<{ Body: OrderRequest }>(
     // processOrder(orderId);
 
     // orderEngine.processOrder(orderId);
+    const responseBody = JSON.stringify({
+      orderId,
+      message: "Order placed successfully!",
+    });
 
     reply.hijack();
 
@@ -144,11 +154,10 @@ fastify.post<{ Body: OrderRequest }>(
       "Content-Type": "application/json",
       Connection: "keep-alive",
       "Keep-Alive": "timeout=10",
+      "Content-Length": Buffer.byteLength(responseBody),
     });
 
-    return reply.raw.end(
-      JSON.stringify({ orderId, message: "Order placed successfully!" })
-    );
+    return reply.raw.end(responseBody);
   }
 );
 
@@ -207,12 +216,10 @@ const start = async () => {
             "Connection upgraded to websocket for live updates!"
           );
 
-          //   ws.on("close", () => {
-          //     fastify.log.info(
-          //       { orderId: order.id, status: order.status },
-          //       "Client asked to close the connection! "
-          //     );
-          //   });
+          ws.on("close", () => {
+            activeClients.delete(orderId);
+            fastify.log.info(`WS closed: ${orderId}`);
+          });
 
           //   ws.on("error", (err) => {
           //     fastify.log.error(
