@@ -1,6 +1,8 @@
-import Fastify from "fastify";
+import Fastify, { FastifyInstance } from "fastify";
 import { v4 as uuidv4 } from "uuid";
 import { WebSocket, WebSocketServer } from "ws";
+import { IncomingMessage } from "http";
+import { Duplex } from "stream";
 import { OrderRequest, OrderState } from "./types";
 import { subscriberConnection } from "./utils/redisConnection";
 import { addOrderToQueue } from "./services/orderQueue";
@@ -11,271 +13,185 @@ import { eq } from "drizzle-orm";
 
 const PORT = Number(process.env.PORT || 3000);
 
-const redisSubscriber = subscriberConnection;
+export interface ILogger {
+  info(msg: string, ...args: any[]): void;
+  error(msg: string, ...args: any[]): void;
+}
 
-const activeClients = new Map<string, WebSocket>();
+export const activeClients = new Map<string, WebSocket>();
+export const websocketServer = new WebSocketServer({ noServer: true });
 
-const fastify = Fastify({
-  logger: true,
-});
-
-// to store orders temporarily.
-const orders = new Map<string, OrderState>();
-
-// we are not attaching any server becuase we want to upgrade manually
-const websocket = new WebSocketServer({ noServer: true });
-
-// const processOrder = (orderId: string) => {
-//   const processStep = (
-//     status: OrderStatus,
-//     delay: number,
-//     next?: () => void
-//   ) => {
-//     setTimeout(() => {
-//       const order = orders.get(orderId);
-
-//       if (!order) return;
-
-//       fastify.log.info(
-//         { orderId: order.id, status: status },
-//         "Status updated!"
-//       );
-
-//       order.status = status;
-
-//       if (order.socket && order.socket.readyState === WebSocket.OPEN) {
-//         try {
-//           order.socket.send(
-//             JSON.stringify({
-//               orderId: order.id,
-//               status,
-//               timestamp: new Date().toISOString(),
-//             })
-//           );
-//         } catch (err) {
-//           fastify.log.error(
-//             { err, orderId: order.id },
-//             "Failed to send status update!"
-//           );
-//         }
-//       }
-
-//       if (next) next();
-
-//       if (status === "confirmed") {
-//         if (order.socket) {
-//           try {
-//             order.socket.close();
-//           } catch {}
-//         }
-
-//         orders.delete(orderId);
-//       }
-//     }, delay);
-//   };
-
-//   processStep("pending", 1000, () => {
-//     processStep("submitted", 1500, () => {
-//       processStep("confirmed", 3000);
-//     });
-//   });
-// };
-
-redisSubscriber.subscribe("order-updates");
-redisSubscriber.on("message", async (channel, message) => {
-  if (channel === "order-updates") {
+export const handleRedisMessage = async (
+  message: string,
+  clients: Map<string, WebSocket>,
+  logger: ILogger = console
+) => {
+  try {
     const update: OrderState = JSON.parse(message);
+    const activeSocket = clients.get(update.id);
 
-    const activeSocketForOrder = activeClients.get(update.id);
-
-    if (
-      activeSocketForOrder &&
-      activeSocketForOrder.readyState === WebSocket.OPEN
-    ) {
+    if (activeSocket && activeSocket.readyState === WebSocket.OPEN) {
       try {
-        activeSocketForOrder.send(
+        activeSocket.send(
           JSON.stringify({
             id: update.id,
             status: update.status,
             timestamp: new Date().toISOString(),
           })
         );
-
-        if (update.status === "pending" || update.status === "queued") {
-          const orderData = {
-            orderId: update.id,
-            inputToken: update.orderDetails.inputToken,
-            outputToken: update.orderDetails.outputToken,
-            amount: update.orderDetails.amount,
-            orderStatus: update.status,
-          };
-
-          const existingOrder = await db
-            .select()
-            .from(orderTable)
-            .where(eq(orderTable.orderId, update.id));
-
-          if (existingOrder.length === 0) {
-            await db.insert(orderTable).values(orderData);
-          }
-        }
-
-        if (update.status === "confirmed" || update.status === "failed") {
-          try {
-            const updatedData = {
-              orderStatus: update.status,
-              updated_at: new Date(),
-              venue: update.venue || null,
-              price: update.price ? String(update.price) : null,
-            };
-
-            await db
-              .update(orderTable)
-              .set(updatedData)
-              .where(eq(orderTable.orderId, update.id));
-            if (activeSocketForOrder) {
-              setTimeout(() => {
-                activeSocketForOrder.close();
-                activeClients.delete(update.id);
-              }, 500);
-            }
-          } catch (err) {
-            fastify.log.error(err);
-          }
-        }
       } catch (err) {
-        console.log(`Failed to send status update for order: ${update.id}`);
+        logger.error(`Failed to send socket update for ${update.id}`);
       }
     }
-  }
-});
 
-fastify.post<{ Body: OrderRequest }>(
-  "/api/orders/execute",
-  async (request, reply) => {
-    const { inputToken, outputToken, amount } = request.body;
+    if (update.status === "pending" || update.status === "queued") {
+      const existingOrder = await db
+        .select()
+        .from(orderTable)
+        .where(eq(orderTable.orderId, update.id));
 
-    if (
-      !inputToken ||
-      !outputToken ||
-      typeof amount !== "number" ||
-      amount <= 0
-    ) {
-      return reply.code(400).send({
-        error:
-          "Invalid error data. Provided all the required information to execute the order!",
-      });
+      if (existingOrder.length === 0) {
+        await db.insert(orderTable).values({
+          orderId: update.id,
+          inputToken: update.orderDetails.inputToken,
+          outputToken: update.orderDetails.outputToken,
+          amount: update.orderDetails.amount,
+          orderStatus: update.status,
+        });
+      }
     }
 
-    const orderId = uuidv4();
+    if (update.status === "confirmed" || update.status === "failed") {
+      await db
+        .update(orderTable)
+        .set({
+          orderStatus: update.status,
+          updated_at: new Date(),
+          venue: update.venue || null,
+          price: update.price ? String(update.price) : null,
+        })
+        .where(eq(orderTable.orderId, update.id));
 
-    // orders.set(orderId, {
-    //   id: orderId,
-    //   orderDetails: { inputToken, outputToken, amount },
-    //   status: "pending",
-    // });
-
-    // orderEngine.createOrder(orderId, { inputToken, outputToken, amount });
-    const orderDetails = { inputToken, outputToken, amount };
-    addOrderToQueue(orderId, orderDetails);
-
-    // processOrder(orderId);
-
-    // orderEngine.processOrder(orderId);
-    const responseBody = JSON.stringify({
-      orderId,
-      message: "Order placed successfully!",
-    });
-
-    reply.hijack();
-
-    // we need to keep the connection alive to upgrade the same connection to websocket;
-    reply.raw.writeHead(200, {
-      "Content-Type": "application/json",
-      Connection: "keep-alive",
-      "Keep-Alive": "timeout=10",
-      "Content-Length": Buffer.byteLength(responseBody),
-    });
-
-    reply.raw.write(responseBody);
-
-    return reply.raw.end();
+      if (activeSocket) {
+        setTimeout(() => {
+          if (activeSocket.readyState === WebSocket.OPEN) activeSocket.close();
+          clients.delete(update.id);
+        }, 500);
+      }
+    }
+  } catch (err) {
+    logger.error(`Error processing Redis message: ${err}`);
   }
-);
+};
+
+export const handleUpgrade = (
+  request: IncomingMessage,
+  socket: Duplex,
+  head: Buffer,
+  wss: WebSocketServer,
+  clients: Map<string, WebSocket>,
+  logger: ILogger = console
+) => {
+  try {
+    const url = new URL(request.url ?? "", `http://${request.headers.host}`);
+
+    if (url.pathname !== "/api/orders/execute") {
+      socket.write("HTTP/1.1 404 Not Found\r\n\r\n");
+      socket.destroy();
+      return;
+    }
+
+    const orderId = url.searchParams.get("orderId");
+    if (!orderId) {
+      socket.write("HTTP/1.1 404 Not Found\r\n\r\n");
+      socket.destroy();
+      return;
+    }
+
+    wss.handleUpgrade(request, socket, head, (ws) => {
+      clients.set(orderId, ws);
+      logger.info(`Connection upgraded for order: ${orderId}`);
+
+      ws.on("close", () => {
+        clients.delete(orderId);
+        logger.info(`WS closed: ${orderId}`);
+      });
+    });
+  } catch (err) {
+    socket.write("HTTP/1.1 400 Bad Request\r\n\r\n");
+    socket.destroy();
+  }
+};
+
+export function buildServer(): FastifyInstance {
+  const app = Fastify({ logger: true });
+
+  app.post<{ Body: OrderRequest }>(
+    "/api/orders/execute",
+    async (request, reply) => {
+      const { inputToken, outputToken, amount } = request.body;
+
+      if (
+        !inputToken ||
+        !outputToken ||
+        typeof amount !== "number" ||
+        amount <= 0
+      ) {
+        return reply.code(400).send({
+          error:
+            "Invalid data. Provide inputToken, outputToken, and valid amount.",
+        });
+      }
+
+      const orderId = uuidv4();
+      const orderDetails = { inputToken, outputToken, amount };
+
+      await addOrderToQueue(orderId, orderDetails);
+
+      const responseBody = JSON.stringify({
+        orderId,
+        message: "Order placed successfully!",
+      });
+
+      reply.hijack();
+      reply.raw.writeHead(200, {
+        "Content-Type": "application/json",
+        Connection: "keep-alive",
+        "Keep-Alive": "timeout=10",
+        "Content-Length": Buffer.byteLength(responseBody),
+      });
+      reply.raw.write(responseBody);
+      return reply.raw.end();
+    }
+  );
+
+  return app;
+}
 
 const start = async () => {
+  const fastify = buildServer();
+
   try {
+    const redisSubscriber = subscriberConnection;
+    redisSubscriber.subscribe("order-updates");
+    redisSubscriber.on("message", (channel, message) => {
+      if (channel === "order-updates") {
+        handleRedisMessage(message, activeClients, fastify.log);
+      }
+    });
+
     await fastify.listen({ port: PORT, host: "0.0.0.0" });
     fastify.log.info(`Server running at http://localhost:${PORT}`);
 
-    const server = fastify.server;
-
-    // manual handling an upgrade event from the client.
-    server.on("upgrade", (request, socket, head) => {
-      try {
-        const url = new URL(
-          request.url ?? "",
-          `http://${request.headers.host}`
-        );
-
-        if (url.pathname != "/api/orders/execute") {
-          fastify.log.error(
-            "Incorrect pathname, please check your connection."
-          );
-          socket.write("HTTP/1.1 404 Not Found\r\n\r\n");
-          socket.destroy();
-          return;
-        }
-
-        const orderId = url.searchParams.get("orderId");
-
-        // if (!orderId || !orderEngine.getOrderDetails(orderId)) {
-        //   socket.write("HTTP/1.1 404 Not Found\r\n\r\n");
-        //   socket.destroy();
-        //   return;
-        // }
-
-        if (!orderId) {
-          socket.write("HTTP/1.1 404 Not Found\r\n\r\n");
-          socket.destroy();
-          return;
-        }
-
-        websocket.handleUpgrade(request, socket, head, (ws) => {
-          //   const order = orderEngine.getOrderDetails(orderId);
-
-          //   if (!order) {
-          //     socket.destroy();
-          //     return;
-          //   }
-
-          //   order.socket = ws;
-          //orderEngine.attachSocketToOrder(orderId, ws);
-
-          activeClients.set(orderId, ws);
-
-          fastify.log.info(
-            "Connection upgraded to websocket for live updates!"
-          );
-
-          ws.on("close", () => {
-            activeClients.delete(orderId);
-            fastify.log.info(`WS closed: ${orderId}`);
-          });
-
-          //   ws.on("error", (err) => {
-          //     fastify.log.error(
-          //       { err, orderId: order.id },
-          //       "WebSocket connection error"
-          //     );
-          //   });
-        });
-      } catch (err) {
-        try {
-          socket.write("HTTP/1.1 400 Bad Request\r\n\r\n");
-        } catch {}
-        socket.destroy();
-      }
+    fastify.server.on("upgrade", (request, socket, head) => {
+      handleUpgrade(
+        request,
+        socket,
+        head,
+        websocketServer,
+        activeClients,
+        fastify.log
+      );
     });
   } catch (err) {
     fastify.log.error(err);
@@ -283,4 +199,6 @@ const start = async () => {
   }
 };
 
-start();
+if (require.main === module && process.env.NODE_ENV !== "test") {
+  start();
+}
