@@ -7,7 +7,10 @@ const publisher = publisherConnection;
 
 const FAILURE_RATES = 0.1;
 
-const simulateFailedOrder = () => Math.random() < FAILURE_RATES;
+const simulateFailedOrder = (job: Job<QueueJobData>) => {
+  const rate = 1 - Math.pow(1 - FAILURE_RATES, job.attemptsMade + 1);
+  return Math.random() < rate;
+};
 
 const delay = (delay: number) =>
   new Promise((resolve) => setTimeout(resolve, delay));
@@ -46,7 +49,7 @@ const processOrder = async (job: Job<QueueJobData>) => {
     await sendUpdates({ id: orderId, orderDetails, status: "submitted" });
     console.log("Successfully published submitted status!");
 
-    if (simulateFailedOrder()) {
+    if (simulateFailedOrder(job)) {
       throw new Error("Mock solana RPC timeout");
     }
 
