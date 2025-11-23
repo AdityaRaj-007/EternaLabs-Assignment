@@ -77,8 +77,8 @@ const placeOrderAndWaitForUpdates = () => {
               }`
             );
 
-            if (update.status === "confirmed" || update.staus === "failed") {
-              console.log("Order submitted, closing the connection.");
+            if (update.status === "confirmed" || update.status === "failed") {
+              console.log(`Order ${update.status}, closing the connection.`);
               ws.close();
             }
           });

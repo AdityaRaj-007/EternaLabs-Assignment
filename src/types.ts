@@ -1,6 +1,11 @@
-import WebSocket from "ws";
-
-export type OrderStatus = "pending" | "submitted" | "confirmed";
+export type OrderStatus =
+  | "pending"
+  | "queued"
+  | "routing"
+  | "building"
+  | "submitted"
+  | "confirmed"
+  | "failed";
 
 export interface OrderRequest {
   inputToken: string;
@@ -17,5 +22,13 @@ export interface OrderState {
   id: string;
   orderDetails: OrderRequest;
   status: OrderStatus;
-  socket?: WebSocket;
+  venue?: string;
+  price?: number;
+  txHash?: string;
+}
+
+export interface Quote {
+  venue: "Raydium" | "Meteora";
+  price: number;
+  fee: number;
 }
