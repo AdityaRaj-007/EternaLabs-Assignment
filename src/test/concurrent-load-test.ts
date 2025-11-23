@@ -158,20 +158,16 @@ const runClient = (clientId: number): Promise<void> => {
           try {
             const update = JSON.parse(message);
 
+            console.log(
+              `📩 UPDATE: Order id: ${
+                update.id
+              }, [${update.status.toUpperCase()}] at ${update.timestamp}`
+            );
+
             if (update.status === "confirmed") {
-              console.log(
-                `📩 UPDATE: Order id: ${
-                  update.id
-                }, [${update.status.toUpperCase()}] at ${update.timestamp}`
-              );
               NUMBER_OF_SUCCESSORDERS++;
               resolve();
             } else if (update.status === "failed") {
-              console.log(
-                `📩 UPDATE: Order id: ${
-                  update.id
-                }, [${update.status.toUpperCase()}] at ${update.timestamp}`
-              );
               NUMBER_OF_FAILEDORDERS++;
               resolve();
             }
@@ -198,9 +194,8 @@ const runConcurrentLoadTest = async () => {
   );
   const startTime = Date.now();
 
-  // Create an array of promises
-  const clients = Array.from({ length: TOTAL_ORDERS }, (_, i) =>
-    runClient(i + 1)
+  const clients = Array.from({ length: TOTAL_ORDERS }, (_, idx) =>
+    runClient(idx + 1)
   );
 
   await Promise.all(clients);

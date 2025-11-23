@@ -64,6 +64,7 @@ const processOrder = async (job: Job<QueueJobData>) => {
       id: orderId,
       orderDetails,
       status: "confirmed",
+      venue: router.venue,
       price: swapDetails.executedPrice,
       txHash: swapDetails.txHash,
     });

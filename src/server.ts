@@ -5,6 +5,10 @@ import { OrderRequest, OrderState } from "./types";
 import { orderEngine } from "./engine";
 import { subscriberConnection } from "./utils/redisConnection";
 import { addOrderToQueue } from "./services/orderQueue";
+import { db } from "./db/config";
+import { orderTable } from "./db/schema";
+import "dotenv/config";
+import { eq } from "drizzle-orm";
 
 const PORT = Number(process.env.PORT || 3000);
 
@@ -79,7 +83,7 @@ const websocket = new WebSocketServer({ noServer: true });
 // };
 
 redisSubscriber.subscribe("order-updates");
-redisSubscriber.on("message", (channel, message) => {
+redisSubscriber.on("message", async (channel, message) => {
   if (channel === "order-updates") {
     const update: OrderState = JSON.parse(message);
 
@@ -98,10 +102,47 @@ redisSubscriber.on("message", (channel, message) => {
           })
         );
 
+        if (update.status === "pending" || update.status === "queued") {
+          const orderData = {
+            orderId: update.id,
+            inputToken: update.orderDetails.inputToken,
+            outputToken: update.orderDetails.outputToken,
+            amount: update.orderDetails.amount,
+            orderStatus: update.status,
+          };
+
+          const existingOrder = await db
+            .select()
+            .from(orderTable)
+            .where(eq(orderTable.orderId, update.id));
+
+          if (existingOrder.length === 0) {
+            await db.insert(orderTable).values(orderData);
+          }
+        }
+
         if (update.status === "confirmed" || update.status === "failed") {
           try {
-            activeSocketForOrder.close();
-          } catch {}
+            const updatedData = {
+              orderStatus: update.status,
+              updated_at: new Date(),
+              venue: update.venue || null,
+              price: update.price ? String(update.price) : null,
+            };
+
+            await db
+              .update(orderTable)
+              .set(updatedData)
+              .where(eq(orderTable.orderId, update.id));
+            if (activeSocketForOrder) {
+              setTimeout(() => {
+                activeSocketForOrder.close();
+                activeClients.delete(update.id);
+              }, 500);
+            }
+          } catch (err) {
+            fastify.log.error(err);
+          }
         }
       } catch (err) {
         console.log(`Failed to send status update for order: ${update.id}`);
@@ -157,7 +198,9 @@ fastify.post<{ Body: OrderRequest }>(
       "Content-Length": Buffer.byteLength(responseBody),
     });
 
-    return reply.raw.end(responseBody);
+    reply.raw.write(responseBody);
+
+    return reply.raw.end();
   }
 );
 
