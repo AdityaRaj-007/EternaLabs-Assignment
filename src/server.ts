@@ -2,7 +2,6 @@ import Fastify from "fastify";
 import { v4 as uuidv4 } from "uuid";
 import { WebSocket, WebSocketServer } from "ws";
 import { OrderRequest, OrderState } from "./types";
-import { orderEngine } from "./engine";
 import { subscriberConnection } from "./utils/redisConnection";
 import { addOrderToQueue } from "./services/orderQueue";
 import { db } from "./db/config";

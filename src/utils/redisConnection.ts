@@ -1,8 +1,12 @@
 import Redis from "ioredis";
+import "dotenv/config";
+
+const REDIS_HOST = process.env.REDIS_HOST || "127.0.0.1";
+const REDIS_PORT = Number(process.env.REDIS_PORT || 6379);
 
 const redisConfig = {
-  port: 6379,
-  host: "127.0.0.1",
+  port: REDIS_PORT,
+  host: REDIS_HOST,
   maxRetriesPerRequest: null,
 };
 
