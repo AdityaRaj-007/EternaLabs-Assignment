@@ -2,7 +2,7 @@
 
 A high-performance backend system for executing **Solana DEX Market Orders** with intelligent routing, concurrent background workers, real-time WebSocket updates, and an extensible job-based architecture.
 
-## This project demonstrates **system design**, **concurrency**, **queues**, **workers**, **WebSockets**, and **DEX price routing**—all built using real-world backend engineering patterns.
+This project demonstrates concurrency, queues, workers,WebSockets, and Mock DEX price routing.
 
 # 🧠 Key Design Decisions
 
