@@ -53,7 +53,6 @@ graph LR
     Client[Client] -- POST /execute --> API[Fastify API]
     Client -- WebSocket --> WS[WS Gateway]
 
-    API -- Insert pending --> DB[(PostgreSQL)]
     API -- Queue job --> Queue[BullMQ]
 
     Queue -- Process --> Worker[Background Worker]
