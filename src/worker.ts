@@ -18,6 +18,7 @@ const delay = (delay: number) =>
   new Promise((resolve) => setTimeout(resolve, delay));
 
 const sendUpdates = async (status: OrderState) => {
+  console.log(`Successfully published ${status.status} status!`);
   await publisher.publish("order-updates", JSON.stringify(status));
 };
 
@@ -27,7 +28,7 @@ const processOrder = async (job: Job<QueueJobData>) => {
   try {
     await delay(1000);
     await sendUpdates({ id: orderId, orderDetails, status: "pending" });
-    console.log("Successfully published pending status!");
+    //console.log("Successfully published pending status!");
 
     await delay(1000);
     const router = await mockDexRouter.getBestRoute(
@@ -41,15 +42,15 @@ const processOrder = async (job: Job<QueueJobData>) => {
       status: "routing",
       venue: router.venue,
     });
-    console.log("Successfully published routing status!");
+    //console.log("Successfully published routing status!");
 
     await delay(1000);
     await sendUpdates({ id: orderId, orderDetails, status: "building" });
-    console.log("Successfully published building status!");
+    //console.log("Successfully published building status!");
 
     await delay(1500);
     await sendUpdates({ id: orderId, orderDetails, status: "submitted" });
-    console.log("Successfully published submitted status!");
+    //console.log("Successfully published submitted status!");
 
     if (simulateFailedOrder(job)) {
       throw new Error("Mock solana RPC timeout");
@@ -68,7 +69,7 @@ const processOrder = async (job: Job<QueueJobData>) => {
       price: swapDetails.executedPrice,
       txHash: swapDetails.txHash,
     });
-    console.log("Successfully published confirmed status!");
+    //console.log("Successfully published confirmed status!");
   } catch (err) {
     console.log(
       `Job Failed (Simulation or Error) for order: ${orderId}. Reason: ${
