@@ -5,7 +5,7 @@ import { mockDexRouter } from "./dex-mock-router";
 
 const publisher = publisherConnection;
 
-const FAILURE_RATES = 0.4;
+const FAILURE_RATES = 0;
 
 const simulateFailedOrder = (job: Job<QueueJobData>) => {
   //console.log(`Attempt no: ${job.attemptsMade}`);
@@ -70,7 +70,11 @@ const processOrder = async (job: Job<QueueJobData>) => {
     });
     console.log("Successfully published confirmed status!");
   } catch (err) {
-    console.log(`Error in sending updates for order: ${orderId}`);
+    console.log(
+      `Job Failed (Simulation or Error) for order: ${orderId}. Reason: ${
+        (err as Error).message
+      }`
+    );
     await sendUpdates({ id: orderId, orderDetails, status: "queued" });
     return Promise.reject(err);
   }
