@@ -5,7 +5,7 @@ import { mockDexRouter } from "./dex-mock-router";
 
 const publisher = publisherConnection;
 
-const FAILURE_RATES = 0;
+const FAILURE_RATES = 0.4;
 
 const simulateFailedOrder = (job: Job<QueueJobData>) => {
   //console.log(`Attempt no: ${job.attemptsMade}`);

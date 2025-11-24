@@ -108,39 +108,9 @@ export const handleUpgrade = (
       return;
     }
 
-    wss.handleUpgrade(request, socket, head, async (ws) => {
+    wss.handleUpgrade(request, socket, head, (ws) => {
       clients.set(orderId, ws);
       logger.info(`Connection upgraded for order: ${orderId}`);
-
-      try {
-        const existingOrders = await db
-          .select()
-          .from(orderTable)
-          .where(eq(orderTable.orderId, orderId));
-
-        if (existingOrders.length > 0) {
-          const order = existingOrders[0];
-          if (
-            order.orderStatus === "confirmed" ||
-            order.orderStatus === "failed"
-          ) {
-            ws.send(
-              JSON.stringify({
-                id: orderId,
-                status: order.orderStatus,
-                timestamp: new Date().toISOString(),
-              })
-            );
-
-            setTimeout(() => {
-              if (ws.readyState === WebSocket.OPEN) ws.close();
-              clients.delete(orderId);
-            }, 500);
-          }
-        }
-      } catch (err) {
-        logger.error(`Error checking initial order state: ${err}`);
-      }
 
       ws.on("close", () => {
         clients.delete(orderId);
