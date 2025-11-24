@@ -73,13 +73,13 @@ graph LR
 drizzle/                         # Database migrations
 src/
 ├── db/                          # Drizzle ORM schemas
-├── services/                    # Queue, Redis, worker setup
+├── services/                    # Queue setup
 ├── test/                        # Automated tests + load tests
-├── utils/                       # Core system utilities
+├── utils/                       # Redis setup
 |   └── redisConnection.ts
 │── dex-mock-router.ts          # Simulates Raydium/Meteora best routing
 │── server.ts                   # Fastify HTTP + WebSocket server
-│── types.ts                    # DTOs, enums, validations
+│── types.ts                    # Interface, enums, validations
 │── worker.ts                   # BullMQ order execution worker
 ├── .env                         # Environment variables
 ├── drizzle.config.ts
@@ -140,20 +140,13 @@ npm install
 ### 2️⃣ Start Redis + Postgres
 
 ```bash
-docker-compose up -d
-```
-
-### 3️⃣ Apply DB schema
-
-```bash
 npm run db:push
 ```
 
 ### 4️⃣ Start API + Worker
 
 ```bash
-npm run dev        # API
-npm run worker     # Worker
+npm run start
 ```
 
 ### 5️⃣ Test order execution
