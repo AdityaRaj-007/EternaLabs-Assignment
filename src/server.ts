@@ -180,6 +180,7 @@ const start = async () => {
     redisSubscriber.subscribe("order-updates");
     redisSubscriber.on("message", (channel, message) => {
       if (channel === "order-updates") {
+        fastify.log.info("Received order status message.");
         handleRedisMessage(message, activeClients, fastify.log);
       }
     });
@@ -188,6 +189,7 @@ const start = async () => {
     fastify.log.info(`Server running at http://localhost:${PORT}`);
 
     fastify.server.on("upgrade", (request, socket, head) => {
+      fastify.log.info("Received request to upgrade the connection!");
       handleUpgrade(
         request,
         socket,
