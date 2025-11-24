@@ -166,7 +166,7 @@ export function buildServer(): FastifyInstance {
   );
 
   app.get("/api/test", (request, reply) => {
-    reply.code(200).send({ message: "Backend is running!" });
+    return reply.code(200).send({ message: "Backend is running!" });
   });
 
   return app;
