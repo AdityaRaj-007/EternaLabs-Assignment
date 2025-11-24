@@ -1,16 +1,21 @@
 import net from "net";
+import tls from "tls";
 import crypto from "crypto";
 import "dotenv/config";
 
-const PORT = Number(process.env.PORT);
-const HOST = process.env.HOST || "127.0.0.1";
-const ENDPOINT = process.env.ENDPOINT;
+const PORT = 443;
+const HOST = "eternalabs-assignment-1.onrender.com";
+const ENDPOINT = process.env.ENDPOINT || "/api/orders/execute";
 const TOTAL_ORDERS = 10;
+
+const IS_SECURE = PORT === 443;
 
 let NUMBER_OF_SUCCESSORDERS = 0;
 let NUMBER_OF_FAILEDORDERS = 0;
 
-console.log(`http://${HOST}:${PORT}${ENDPOINT}`);
+console.log(
+  `Target: ${IS_SECURE ? "https://" : "http://"}${HOST}:${PORT}${ENDPOINT}`
+);
 
 const generateWebsocketKey = () => {
   return crypto.randomBytes(16).toString("base64");
@@ -18,10 +23,14 @@ const generateWebsocketKey = () => {
 
 const runClient = (clientId: number): Promise<void> => {
   return new Promise((resolve, reject) => {
-    const socket = new net.Socket();
+    let socket: net.Socket | tls.TLSSocket;
 
-    socket.connect(PORT, HOST, () => {
-      console.log("1. Connected to server via tcp soclet");
+    const onConnect = () => {
+      console.log(
+        `[Client ${clientId}] Connected to server via ${
+          IS_SECURE ? "TLS" : "TCP"
+        }`
+      );
 
       const body = JSON.stringify({
         inputToken: "SOL",
@@ -33,65 +42,87 @@ const runClient = (clientId: number): Promise<void> => {
 
       const httpReq =
         `POST ${ENDPOINT} HTTP/1.1\r\n` +
-        `Host: ${HOST}:${PORT}\r\n` +
+        `Host: ${HOST}\r\n` +
         `Content-Type: application/json\r\n` +
         `Content-Length: ${bodyLength}\r\n` +
         `Connection: keep-alive\r\n` +
         `\r\n` +
         body;
 
-      console.log("2. Sending HTTP POST req...");
       socket.write(httpReq);
-    });
+    };
+
+    if (IS_SECURE) {
+      socket = tls.connect(
+        PORT,
+        HOST,
+        {
+          servername: HOST,
+          ALPNProtocols: ["http/1.1"],
+          rejectUnauthorized: false,
+        },
+        onConnect
+      );
+    } else {
+      socket = new net.Socket();
+      socket.connect(PORT, HOST, onConnect);
+    }
 
     let buffer = Buffer.alloc(0);
-
     let currStep = "Sending POST Req";
     let orderId: string = "";
 
     socket.on("data", (chunk) => {
       buffer = Buffer.concat([buffer, chunk]);
+      const resStr = buffer.toString("utf-8");
 
       if (currStep === "Sending POST Req") {
-        const headerEndIdx = buffer.indexOf("\r\n\r\n");
+        const jsonStart = resStr.indexOf("{");
+        const jsonEnd = resStr.lastIndexOf("}");
 
-        if (headerEndIdx !== -1) {
-          const resStr = buffer.toString("utf-8");
-
-          console.log("\n📩 HTTP Response Received");
-
+        if (jsonStart !== -1 && jsonEnd !== -1) {
           try {
-            //console.log(resStr);
-            const resParts = resStr.split("\r\n\r\n");
-            //console.log(resParts);
-            const body = resParts[1];
-            //console.log(body);
-            const data = JSON.parse(body);
-            //console.log(data);
-            orderId = data.orderId;
-            console.log(`Order id: ${orderId}`);
+            const jsonString = resStr.substring(jsonStart, jsonEnd + 1);
+            const data = JSON.parse(jsonString);
 
-            buffer = Buffer.alloc(0);
-            currStep = "Upgrade Connection";
-            sendUpgradeRequest();
+            if (data.orderId) {
+              orderId = data.orderId;
+              console.log(`[Client ${clientId}] ✅ Order Created: ${orderId}`);
+
+              buffer = buffer.subarray(
+                Buffer.byteLength(resStr.substring(0, jsonEnd + 1))
+              );
+
+              currStep = "Upgrade Connection";
+              sendUpgradeRequest();
+            }
           } catch (err) {
-            console.error("Error parsing JSON or incomplete body:", err);
+            // Partial JSON, wait for more data
           }
         }
       } else if (currStep === "Upgrade Connection") {
+        const upgradeHeaderStart = buffer.indexOf("HTTP/1.1 101");
+
+        if (upgradeHeaderStart === -1) {
+          if (buffer.length < 50 && !resStr.includes("HTTP")) {
+            buffer = Buffer.alloc(0);
+          }
+          return;
+        }
+
+        if (upgradeHeaderStart > 0) {
+          buffer = buffer.subarray(upgradeHeaderStart);
+        }
+
         const headerEndIdx = buffer.indexOf("\r\n\r\n");
 
         if (headerEndIdx !== -1) {
-          const resStr = buffer.toString("utf-8");
+          console.log(`[Client ${clientId}] 🟢 WebSocket Upgrade Successful!`);
 
-          if (resStr.startsWith("HTTP/1.1 101")) {
-            console.log("\n🟢 WebSocket Upgrade Successful!");
+          buffer = buffer.subarray(headerEndIdx + 4);
+          currStep = "WEBSOCKET";
 
-            buffer = buffer.subarray(headerEndIdx + 4);
-            currStep = "WEBSOCKET";
-
-            if (buffer.length > 0) processWebSocketFrame();
-          }
+          if (buffer.length > 0) processWebSocketFrame();
         }
       } else if (currStep === "WEBSOCKET") {
         processWebSocketFrame();
@@ -99,14 +130,10 @@ const runClient = (clientId: number): Promise<void> => {
     });
 
     const sendUpgradeRequest = () => {
-      console.log(
-        "3. Sending WebSocket upgrade request on the same connection."
-      );
       const websocketKey = generateWebsocketKey();
-
       const upgradeReq =
         `GET ${ENDPOINT}?orderId=${orderId} HTTP/1.1\r\n` +
-        `Host: ${HOST}:${PORT}\r\n` +
+        `Host: ${HOST}\r\n` +
         `Upgrade: websocket\r\n` +
         `Connection: Upgrade\r\n` +
         `Sec-WebSocket-Key: ${websocketKey}\r\n` +
@@ -123,7 +150,6 @@ const runClient = (clientId: number): Promise<void> => {
 
         const secondByte = buffer[1];
         let payloadLength = secondByte & 0x7f;
-
         let offset = 2;
 
         if (payloadLength === 126) {
@@ -131,33 +157,19 @@ const runClient = (clientId: number): Promise<void> => {
           payloadLength = buffer.readUInt16BE(2);
           offset = 4;
         } else if (payloadLength === 127) {
-          console.log(
-            "Message too large (64-bit length not supported in this simple parser)"
-          );
-          return;
-        }
-
-        if (buffer.length < offset + payloadLength) {
-          return;
-        }
-
-        const payload = buffer.subarray(offset, offset + payloadLength);
-
-        buffer = buffer.subarray(offset + payloadLength);
-
-        if (opCode === 0x08) {
-          console.log("🔴 Server sent Close Frame");
           socket.end();
           return;
         }
 
-        if (opCode === 0x01) {
-          //console.log(`📨 Message: ${payload.toString("utf8")}`);
-          const message = payload.toString("utf8");
+        if (buffer.length < offset + payloadLength) return;
 
+        const payload = buffer.subarray(offset, offset + payloadLength);
+        buffer = buffer.subarray(offset + payloadLength);
+
+        if (opCode === 0x01) {
+          const message = payload.toString("utf8");
           try {
             const update = JSON.parse(message);
-
             console.log(
               `📩 UPDATE: Order id: ${
                 update.id
@@ -166,46 +178,43 @@ const runClient = (clientId: number): Promise<void> => {
 
             if (update.status === "confirmed") {
               NUMBER_OF_SUCCESSORDERS++;
+              socket.end();
               resolve();
             } else if (update.status === "failed") {
               NUMBER_OF_FAILEDORDERS++;
+              socket.end();
               resolve();
             }
           } catch (err) {
-            console.error("Error parsing JSON or incomplete body:", err);
+            console.error(`[Client ${clientId}] JSON Error`, err);
           }
+        } else if (opCode === 0x08) {
+          console.log(`[Client ${clientId}] 🔴 Server sent Close Frame`);
+          socket.end();
+          resolve();
         }
       }
     };
 
-    socket.on("error", (err: Error) => {
-      console.error("Socket Error:", err);
+    socket.on("error", (err) => {
+      console.error(`[Client ${clientId}] Error:`, err.message);
+      resolve();
     });
 
-    socket.on("end", () => {
-      console.log("🔴 Socket closed");
-    });
+    socket.on("end", () => resolve());
   });
 };
 
 const runConcurrentLoadTest = async () => {
-  console.log(
-    `🚀 Starting Load Test with ${TOTAL_ORDERS} concurrent clients...`
-  );
+  console.log(`🚀 Starting Load Test with ${TOTAL_ORDERS} clients...`);
   const startTime = Date.now();
-
   const clients = Array.from({ length: TOTAL_ORDERS }, (_, idx) =>
     runClient(idx + 1)
   );
-
   await Promise.all(clients);
-
   const duration = (Date.now() - startTime) / 1000;
 
   console.log("\n========================================");
-  console.log("📊 LOAD TEST RESULTS");
-  console.log("========================================");
-  console.log(`Total Clients: ${TOTAL_ORDERS}`);
   console.log(`✅ Successful:  ${NUMBER_OF_SUCCESSORDERS}`);
   console.log(`❌ Failed:      ${NUMBER_OF_FAILEDORDERS}`);
   console.log(`⏱️ Duration:    ${duration.toFixed(2)}s`);
